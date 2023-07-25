@@ -1,0 +1,310 @@
+---
+title: "Final Project R-Programming: Historical Analysis of NYC Shootings"
+author: "Meghan Holquist"
+date: '2023-05-05'
+output: html_document
+---
+
+## Introduction 
+My data is from New York City's Open Data platform and is a historical record of shooting incidents in New York City (https://data.cityofnewyork.us/Public-Safety/NYPD-Shooting-Incident-Data-Historic-/833y-fsy8). The data ranges from 2006 to 2022 and contains information such as victim demographics, perpetrator demographics as well as the date, time, and exact location of the incident. In total there are 19 columns and 25596 observations in my data set; a majority of the data is categorical. I was interested in this data set because gun violence is a rising problem in America; I was curious about gun violence trends specifically in urban areas, such as New York City. Since this is historical data, it will be interesting to see if and how trends have changed over time. Furthermore, the results from this analysis can help aid policymakers when creating policy related to gun violence or crime more generally. 
+
+## Research Questions & Hypotheses
+
+**1) Which populations experience higher rates of gun violence?** 
+I think there are certain populations that are targeted more by gun violence compared to others. More specifically, I think that minority groups experience gun violence at higher rates compared to White individuals. 
+
+**2) Which neighborhoods experience higher rates of gun violence?** 
+I think many aspects differ neighborhood-to-neighborhood, so it would be interesting to see how gun violence is impacted by this. Based off my hypothesis for the first question, I think that predominantly-minority communities experience the highest rates of gun violence in New York City.  
+
+**3) How have trends in gun violence changed over time in NYC?**
+Based off of general trends within the US, I think that gun violence rates will be trending upwards in more recent years.
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+library(leaflet)
+library(kableExtra)
+```
+
+## Initial Pre-processing
+### Reading in the Data
+
+```{r}
+#load the dataset
+nyc_shootings <- read.csv("NYPD_Shooting_Incident_Data__Historic_.csv")
+```
+
+```{r}
+#check head of data
+head(nyc_shootings)
+
+#Looking at the shape of the dataset
+nrow(nyc_shootings)
+ncol(nyc_shootings)
+```
+
+
+### Data Cleaning 
+
+```{r}
+#Looking at percent missing values in the dataset
+round(colMeans(is.na(nyc_shootings)) * 100, 2)
+```
+
+Just by looking at the percent of NA's there doesn't appear to be any misssing values. However, when we look at the head of the data we can see this is not the case as there are blanks in some rows. This tells me that instead of classifying those missing values as "NA", they were simply left blank. I am going to check the unique values for these columns to further investigate. In order to properly deal with the missing values, I will need to fill all of the blanks with NA. This will give me a better understanding of how many missing values there are in my data set. 
+
+
+
+```{r}
+#Before I fill the blanks, I just want to check how its structured - is it one space or multiple
+nyc_shootings$PERP_AGE_GROUP[1:10]
+
+#Now that I've verified, can fill with NA
+nyc_shootings[nyc_shootings == ""] <- NA
+
+#Now lets check the NA's again
+round(colMeans(is.na(nyc_shootings)) * 100, 2)
+```
+
+After changing the blank values to NA's, I can now get a much better sense of the missing values. It appears all columns are complete except for LOCATION_DESC, PERP_RACE, PERP_SEX, PERP_AGE_GROUP, and  JURISDICTION CODE. Most of the columns with the highest percentage of missing values represent perpetrator demographics. It is not surprising these columns have missing values as it is likely they did not catch the perpetrator, or witnesses did not see who the perpetrator was. It is surprising that the location description has such a high amount of missing values but the borough and latitude/longitude columns have none. However, because none of my research questions are related to these columns, I will keep them as is with the NA's (I will not impute or fill in any values). 
+
+
+
+```{r}
+#Now I can check for datatypes
+str(nyc_shootings)
+
+#need to change the dates and times to proper format 
+nyc_shootings$OCCUR_DATE <- mdy(nyc_shootings$OCCUR_DATE)
+nyc_shootings$OCCUR_TIME <- hms(nyc_shootings$OCCUR_TIME)
+
+#checking it after
+str(nyc_shootings)
+```
+
+
+## Question 1: Which populations experience higher rates of gun violence? 
+
+```{r}
+#Lets make a table showing the proportion of victims by gender.
+#Making labels more informative
+nyc_shootings <- nyc_shootings%>%
+  mutate(VIC_SEX = recode(VIC_SEX, "F" = "Female", "M" = "Male", "U" = "Unknown")) 
+
+sex_proportions <- prop.table(table(nyc_shootings$VIC_SEX))
+
+sex_table <- as.data.frame(sex_proportions *100)
+names(sex_table) <- c("Victim Sex", "Proportion")
+sex_table %>%
+  kbl(digits = 2) %>%
+  kable_classic() 
+
+```
+
+
+After examining the proportion of victims' sex, we can see a large majority of the victims are male (90.57%) and 9.39% are female (with a very small proportion of victims' sex unknown). 
+
+
+
+```{r}
+#Lets make a table showing the proportion of victims by race. 
+race_proportions <- prop.table(table(nyc_shootings$VIC_RACE))
+
+#percentage and cleaning up labels
+race_table <- as.data.frame(race_proportions *100)
+names(race_table) <- c("Victim Race", "Proportion")
+
+race_table %>%
+  kbl(digits = 2) %>%
+  kable_classic()
+```
+
+
+From this table we can see that the racial group representing the highest proportion of victims is Black (71%), followed by White Hispanic (14.6%), and Black Hispanic (9.7%). This data clearly demonstrates that certain racial groups experience gun violence more than others.
+
+
+
+```{r}
+# Subset by gender
+male_victims <- nyc_shootings[nyc_shootings$VIC_SEX == "Male", ]
+female_victims <- nyc_shootings[nyc_shootings$VIC_SEX == "Female", ]
+
+# Female Prop
+female_race_proportions <- prop.table(table(female_victims$VIC_RACE)) %>% data.frame()
+
+# Male prop
+male_race_proportions <- prop.table(table(male_victims$VIC_RACE)) %>% data.frame()
+
+# Combine
+race_prop <- data.frame(
+  race = female_race_proportions[,1],
+  f = female_race_proportions[,2],
+  m = male_race_proportions[,2]
+)
+
+race_prop_long <- pivot_longer(race_prop, cols = f:m, names_to = "gender", values_to = "prop")
+
+race_prop_long <- race_prop_long %>%
+  mutate(gender = ifelse(gender == "f", "Female", "Male"),
+         race = stringr::str_to_title(race))
+
+# Plot the prop
+# https://stackoverflow.com/questions/57613354/order-facet-wrap-plots-by-descending-order
+ggplot(race_prop_long) +
+  geom_col(aes(y = fct_reorder(race, prop, .desc = F), x = prop), fill = "darkorange") +
+  facet_wrap(facets = ~gender) +
+  labs(title = "Proportion of Victims by Race and Gender",
+       x = "Proportion",
+       y = "Race") +
+  theme_minimal()
+```
+
+
+From this plot we can see the proportions of male and female victims by race. There appear to be similar trends in terms of which racial group accounts for the largest proportion of victims across both sex's; Black victims make up the majority. Even though there are far more male victims than female victims, the majority of victims are Black across both sex's. After examining these results, we can conclude that black males are most often the target of gun violence in New York City. 
+
+
+## Question 2: Which neighborhoods experience higher rates of gun violence? 
+
+```{r}
+#create a map of shooting incident locations
+#http://rstudio.github.io/leaflet/markers.html
+map <- leaflet() %>%
+      addTiles() %>%
+      setView(-74.00, 40.71, zoom = 10) %>%
+      addCircleMarkers(data = nyc_shootings, 
+                   lng = ~Longitude, 
+                   lat = ~Latitude, 
+                   radius = .02,
+                   fillOpacity = 0.5, 
+                   color = "red", 
+                   stroke = FALSE, 
+                   popup = "Shooting Incident") %>%
+      addProviderTiles("CartoDB.Positron") 
+
+map %>% addControl(html = "<h3>NYC Shooting Incident Locations Since 2006 </h3>", position = "topright")
+
+```
+
+```{r}
+#Plot total # incidents by boro
+#https://guslipkin.medium.com/reordering-bar-and-column-charts-with-ggplot2-in-r-435fad1c643e
+nyc_shootings%>%
+  mutate(BORO = stringr::str_to_title(BORO)) %>%
+  group_by(BORO) %>%
+  summarise(total_inc = n()) %>%
+  ggplot() + 
+  geom_bar(aes(x = reorder(BORO, -total_inc), y = total_inc), 
+           col = "black", fill = "darkorange", stat = "identity") + 
+  labs(title = "Brooklyn and Bronx Lead NYC in Total Shootings", 
+       x = "Borough", 
+       y = "Total Incidents") + 
+  theme_minimal()
+```
+
+
+We can see from the map that there are clusters in terms of where shooting incidents often occur. The barchart above gives us more insight into which neighborhoods these incidents are occurring most frequently. We can see that Brooklyn and the Bronx have the highest total number of shooting incidents out of all boroughs, and Staten Island has the least. Although we can see this visually, it will be helpful to perform a statistical test to determine if the average monthly shootings are significantly different across boroughs. 
+
+
+
+```{r}
+#do a statistical test to see if the avg number of shootings in each boro is significantly different 
+#https://www.r-bloggers.com/2022/11/how-to-do-pairwise-comparisons-in-r/
+boro_incidents <- nyc_shootings%>%
+                mutate(month_year = format(as.Date(OCCUR_DATE), "%b-%Y"), 
+                BORO = as.factor(BORO))%>%
+                group_by(BORO, month_year) %>%
+                summarise(n_incidents = n()) 
+
+boro_incidents <- as.data.frame(boro_incidents)
+
+#First we need to do annova 
+boro_annova <- aov(n_incidents ~ BORO, data = boro_incidents)
+summary(boro_annova)
+
+#Now lets do Tukey to actually see which ones are different 
+#annova plugs into the tukey
+TukeyHSD(boro_annova, conf.level=.95)
+
+```
+
+
+First I performed an ANNOVA to see if there was a significant difference in the means across each borough. Because the p-value is less than .05, we reject the null hypothesis that there is no difference in the average number of shooting incidents across each borough. Then, to determine how exactly the boroughs differed, I performed a Tukey test. The results of the Tukey test showed that the difference in average shooting incidents between every borough as well as the direction of the difference. The comparison between every borough was significantly different except for the comparison between Manhattan and Queens (p-value of .298 is > .05). Therefore, Manhattan and queens do not have significantly different rates of gun violence. Brooklyn has a significantly larger average number of shooting incidents compared to all other boroughs, and Staten Island has significantly less shootings than every other borough in New York City. These results are consistent with the patterns we saw in the bar chart above.
+
+
+
+## Question 3:  How have trends in gun violence changed over time in NYC?
+
+```{r}
+#make ts graph of shooting incidents 
+nyc_shootings_ts <- nyc_shootings %>%
+  mutate(year_month = format(as.Date(OCCUR_DATE), "%Y-%m"))
+
+# Calculate monthly counts
+monthly_counts <- nyc_shootings_ts %>%
+  group_by(year_month) %>%
+  summarise(count = n()) %>%
+  ungroup() %>%
+  mutate(year_month = as.Date(paste0(year_month, "-01")))
+
+ggplot(monthly_counts, aes(x = year_month, y = count)) +
+  geom_line() +
+  scale_x_date(date_labels = "%Y", date_breaks = "2 years") +
+  geom_vline(xintercept = as.Date("2020-03-01"), col = "red", linetype = "dashed") +
+  labs(title = "Monthly Counts of NYC Shootings",
+       subtitle = "Dashed line marks the start of Covid",
+       x = "",
+       y = "Shooting Incidents") +
+  theme_minimal()
+```
+
+
+To evaluate this question, I created a time series graph of the total monthly shootings in New York City. From the first graph, there appear to be 4 distinct periods. The first is from 2006 to 2013, the second is from 2013 to 2017, the third is 2017-2020, and then post-2020; the average rate of shooting incidents seems to be decreasing until 2020. The red line on the graph marks the start of the COVID-19 pandemic; we can see there was a dramatic increase in the number of gun violence incidents during this period.
+
+
+
+```{r}
+# Zoom in for seasonality
+monthly_counts %>%
+  filter(year_month < "2009-01-01") %>%
+  ggplot(., aes(x = year_month, y = count)) +
+  geom_line() +
+  scale_x_date(date_labels = "%b %Y", date_breaks = "4 months") +
+  labs(title = "NYC Shootings Increase With Temperature", # Shootings With Temperature
+       x = "",
+       y = "Shooting Incidents") +
+  theme_minimal()
+```
+
+
+From the initial time series graph, there appears to be seasonality of gun violence trends, which this second graph dives into more. For the second graph I zoomed in to the first three years of our data set because there seemed to be a clear and consistent pattern there. We can see that the cyclical pattern of shooting incidents aligns with the seasons. The number of incidents reaches its peak in the summer months (warmer temperatures) and falls to its minimum in the winter months (colder temperatures). This indicates the number of shooting incidents is related to the season/temperature. 
+
+
+
+## Conclusions & Policy Recommendations
+
+**Question 1: Which populations experience higher rates of gun violence?**
+I found that the proportion of NYC shooting victims are predominantly Black males; Black individuals make up the majority of victims across both sex's. These results were consistent with my original hypothesis. 
+
+
+**Question 2: Which neighborhoods experience higher rates of gun violence?**
+
+The results from this analysis indicate that Brooklyn and the Bronx experience higher rates of gun violence compared to other boroughs in New York City. If we compare this to our results from the first question, the results make sense. Minority communities are more often the target of gun violence, and there is a larger proportion of minority communities in these boroughs compared to others. 
+
+**Question 3: How have trends in gun violence changed over time in NYC?**
+From the graph we can see that there is a cyclical nature to gun violence trends in New York City. Additionally, we can see that the average shooting incidents was trending downward until the pandemic, after which rates increased dramatically.  
+
+
+Overall, I have found that there are particular groups and neighborhoods that experience gun violence at higher rates compared to others. Since this data is across the last 16 years, there seems to be a systemic issue and  policymakers should prioritize protecting these communities. Furthermore, consistent with overall trends in the U.S., the number of gun violence incidents has increased significantly in recent years, particularly after covid; Policymakers should target their efforts at slowing the rates of gun violence within New York City. Future work related to this topic could involve examining how victim demographics change over time as well as understanding why there was such a dramatic increase in gun violence following the pandemic. 
+
+ 
+
+
+
+
+
+
+
+
